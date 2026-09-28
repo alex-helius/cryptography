@@ -144,55 +144,24 @@ unsafe fn apply_dense_matrix_simd<const T: usize>(state: &mut [U256; T], mds: &[
 #[inline(always)]
 fn apply_dense_matrix<const T: usize>(state: &mut [U256; T], m: &[[U256; T]; T]) {
     type B = Backend<Fr>;
-    let mut new_state = [U256::zero(); T];
-    for i in 0..T {
-        let mut sum = U256::zero();
-        for (j, state_val) in state.iter().enumerate() {
-            let term = B::mul(&m[i][j], state_val);
-            sum = B::add(&sum, &term);
-        }
-        new_state[i] = sum;
+    let input = *state;
+    for (value, row) in state.iter_mut().zip(m) {
+        *value = B::sum_of_products(row, &input);
     }
-    *state = new_state;
 }
 
 /// Computes only the first output of a dense matrix multiplication.
 #[inline(always)]
 fn apply_dense_matrix_row0<const T: usize>(state: &mut [U256; T], m: &[[U256; T]; T]) {
-    type B = Backend<Fr>;
-    let mut sum = U256::zero();
-    for (j, state_val) in state.iter().enumerate() {
-        let term = B::mul(&m[0][j], state_val);
-        sum = B::add(&sum, &term);
-    }
-    state[0] = sum;
+    state[0] = Backend::<Fr>::sum_of_products(&m[0], state);
 }
 
 /// Executes an `O(T)` sparse matrix multiplication on the scalar state.
 #[inline(always)]
 fn apply_sparse_matrix<const T: usize>(state: &mut [U256; T], m: &SparseMatrix<T>) {
     type B = Backend<Fr>;
-    let mut first_word = U256::zero();
-    // Limit this loop form to the width ranges favored by the Zen 4
-    // reference benchmarks.
-    let skip_first_add = if cfg!(all(target_arch = "x86_64", target_feature = "avx512ifma")) {
-        (9..=13).contains(&T)
-    } else {
-        cfg!(target_arch = "x86_64") && (2..=6).contains(&T)
-    };
-
-    // Row vector dot product for the new state[0]
-    for (j, state_val) in state.iter().enumerate() {
-        let term = B::mul(&m.row[j], state_val);
-        first_word = if skip_first_add && j == 0 {
-            term
-        } else {
-            B::add(&first_word, &term)
-        };
-    }
-
     let prev_first = state[0];
-    state[0] = first_word;
+    state[0] = B::sum_of_products(&m.row, state);
 
     // Identity operations scaled by the sparse column vector
     for (i, state_val) in state.iter_mut().enumerate().skip(1) {

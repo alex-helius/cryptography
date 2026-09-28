@@ -120,3 +120,77 @@ fn mul_chains_match_arkworks() {
         }
     }
 }
+
+fn assert_sum_of_products<const N: usize>(a: &[U256; N], b: &[U256; N], r_inverse: ArkFr) {
+    let sum: ArkFr = a
+        .iter()
+        .zip(b)
+        .map(|(x, y)| as_ark_integer(x) * as_ark_integer(y))
+        .sum();
+    assert_eq!(
+        B::sum_of_products(a, b),
+        from_ark(sum * r_inverse),
+        "incorrect sum of products for a={a:?}, b={b:?}"
+    );
+}
+
+fn check_sum_of_products<const N: usize>(rng: &mut StdRng, r_inverse: ArkFr) {
+    let values = boundary_operands();
+    for start in 0..values.len() {
+        let a: [U256; N] = core::array::from_fn(|k| values[(start + k) % values.len()]);
+        let b: [U256; N] = core::array::from_fn(|k| values[(start + 3 * k + 1) % values.len()]);
+        assert_sum_of_products(&a, &b, r_inverse);
+    }
+
+    // Operands just below MODULUS push each chunk sum toward `MODULUS * 2^256`.
+    let operands: [fn(&mut StdRng) -> U256; 2] = [random_operand, |rng| {
+        from_ark(-ArkFr::from(u64::from(rng.random::<u32>()) + 1))
+    }];
+    for operand in operands {
+        for _ in 0..64 {
+            let a: [U256; N] = core::array::from_fn(|_| operand(rng));
+            let b: [U256; N] = core::array::from_fn(|_| operand(rng));
+            assert_sum_of_products(&a, &b, r_inverse);
+        }
+    }
+}
+
+#[test]
+fn sum_of_products_matches_arkworks() {
+    let mut rng = StdRng::seed_from_u64(0x7375_6d5f_7072_6f64);
+    let r_inverse = montgomery_r_inverse();
+    macro_rules! widths {
+        ($($n:literal)+) => { $(check_sum_of_products::<$n>(&mut rng, r_inverse);)+ };
+    }
+    widths!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17);
+}
+
+#[test]
+fn sum_of_products_small_modulus() {
+    struct SmallField;
+
+    impl solana_bn254::backend::Field for SmallField {
+        const MODULUS: U256 = U256::new([97, 0, 0, 0]);
+        const INV: u64 = 0x5c5f02a3a0fd5c5f;
+        const R2: U256 = U256::new([35, 0, 0, 0]);
+    }
+
+    type SmallBackend = Backend<SmallField>;
+    assert_eq!(SmallBackend::sum_of_products(&[], &[]), U256::zero());
+
+    let radix = (0..256).fold(1u64, |r, _| 2 * r % 97);
+    let r_inverse = (1..97).find(|r| r * radix % 97 == 1).unwrap();
+    for a in 0..97 {
+        for b in 0..97 {
+            let x = U256::new([a, 0, 0, 0]);
+            let y = U256::new([b, 0, 0, 0]);
+            for (actual, terms) in [
+                (SmallBackend::sum_of_products(&[x], &[y]), 1),
+                (SmallBackend::sum_of_products(&[x; 2], &[y; 2]), 2),
+            ] {
+                let expected = U256::new([terms * a * b * r_inverse % 97, 0, 0, 0]);
+                assert_eq!(actual, expected, "a={a}, b={b}, terms={terms}");
+            }
+        }
+    }
+}
