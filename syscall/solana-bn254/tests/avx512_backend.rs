@@ -11,7 +11,7 @@
 
 use ark_ff::PrimeField;
 use rand::RngExt;
-use solana_bn254::backend::avx512::math::{mul_8x, sbox_8x};
+use solana_bn254::backend::avx512::math::{mul_8x, sbox_8x, sum_of_products_8x};
 use solana_bn254::backend::avx512::pack::{pack_8x, unpack_8x};
 use solana_bn254::backend::{Backend, Field, Fr, MontgomeryBackend, U256};
 use solana_bn254::poseidon::sbox;
@@ -94,4 +94,42 @@ fn sbox_matches_portable_backend() {
             assert!(is_canonical(&got[lane]), "lane {lane} left unreduced");
         }
     }
+}
+
+fn near_modulus() -> U256 {
+    let mut m = <Fr as Field>::MODULUS;
+    m.0[0] -= u64::from(rand::rng().random::<u32>()) + 1;
+    m
+}
+
+fn check_sum_of_products<const N: usize>() {
+    for operand in [random_element, near_modulus] {
+        for _ in 0..16 {
+            let a: [[U256; 8]; N] = core::array::from_fn(|_| core::array::from_fn(|_| operand()));
+            let b: [[U256; 8]; N] = core::array::from_fn(|_| core::array::from_fn(|_| operand()));
+            let got = unsafe {
+                unpack_8x(&sum_of_products_8x(
+                    &a.map(|x| pack_8x(&x)),
+                    &b.map(|x| pack_8x(&x)),
+                ))
+            };
+            for lane in 0..8 {
+                let lane_a: [U256; N] = core::array::from_fn(|k| a[k][lane]);
+                let lane_b: [U256; N] = core::array::from_fn(|k| b[k][lane]);
+                let want = Backend::<Fr>::sum_of_products(&lane_a, &lane_b);
+                assert_eq!(
+                    got[lane], want,
+                    "width {N}, lane {lane}, a={lane_a:?}, b={lane_b:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn sum_of_products_matches_portable_backend() {
+    macro_rules! widths {
+        ($($n:literal)+) => { $(check_sum_of_products::<$n>();)+ };
+    }
+    widths!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17);
 }

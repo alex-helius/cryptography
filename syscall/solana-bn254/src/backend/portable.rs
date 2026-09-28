@@ -63,7 +63,7 @@ pub(super) use fq2_sum::FqSum;
 
 impl<F: Field> PortableBackend<F> {
     /// `LAZY_TERMS * MODULUS < 2^256` keeps a chunk sum below `MODULUS * 2^256`.
-    const LAZY_TERMS: usize = {
+    pub(crate) const LAZY_TERMS: usize = {
         let terms = (1u128 << 64) / (F::MODULUS.0[3] as u128 + 1);
         if terms > usize::MAX as u128 {
             usize::MAX
